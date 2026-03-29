@@ -1,15 +1,21 @@
-# Sử dụng Bun trên nền Alpine để có kích thước nhỏ nhất (~50MB)
-FROM oven/sh:alpine
+# Sử dụng image Bun Alpine chính thức
+FROM oven/bun:alpine
 
 # Thiết lập thư mục làm việc
 WORKDIR /app
 
+# Cài đặt các thư viện cần thiết để chạy các package Node.js trên Alpine
+# libc6-compat giúp tương thích với các ứng dụng biên dịch cho Linux thông thường
+RUN apk add --no-cache libc6-compat
+
 # Cài đặt 9router toàn cục
-# Alpine dùng tài khoản 'root' mặc định, ta cài trực tiếp vào bin
 RUN bun add -g 9router
+
+# Thêm đường dẫn bin của bun vào PATH để nhận diện lệnh 9router
+ENV PATH="/root/.bun/bin:${PATH}"
 
 # Mở cổng 20128
 EXPOSE 20128
 
-# Chạy trực tiếp từ đường dẫn binary của bun toàn cục
-CMD ["/root/.bun/bin/9router"]
+# Chạy 9router
+CMD ["9router"]
