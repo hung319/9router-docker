@@ -1,0 +1,63 @@
+name: Auto Build and Keep-Alive
+
+on:
+  workflow_dispatch: # Cho phép chạy tay
+  schedule:
+    - cron: '0 0 * * *' # Chạy tự động vào 00:00 mỗi ngày
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # 1. Kiểm tra version mới từ repo gốc
+      - name: Check for 9router updates
+        id: check_version
+        run: |
+          LATEST_VER=$(curl -s https://api.github.com/repos/decolua/9router/releases/latest | jq -r .tag_name)
+          echo "latest_version=$LATEST_VER" >> $GITHUB_OUTPUT
+          echo "Phiên bản mới nhất trên upstream: $LATEST_VER"
+
+      # 2. Tạo commit giả để duy trì Action (Keep-alive)
+      - name: Keep-alive commit
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          echo "Last run: $(date)" > keep-alive.txt
+          git add keep-alive.txt
+          git commit -m "chore: daily keep-alive build $(date)" || echo "No changes to commit"
+          git push
+
+      # 3. Set up Docker Buildx
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # 4. Login ghcr.io
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 5. Build và Push (Sử dụng version tag để quản lý tốt hơn)
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.check_version.outputs.latest_version }}
+          platforms: linux/amd64,linux/arm64
+          # Cache giúp build nhanh hơn ở các lần sau
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
