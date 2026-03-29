@@ -1,9 +1,9 @@
-name: Auto Build and Keep-Alive
+name: Smart Auto Build & Keep-Alive
 
 on:
-  workflow_dispatch: # Cho phép chạy tay
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # Chạy tự động vào 00:00 mỗi ngày
+    - cron: '0 0 * * *' # Kiểm tra mỗi ngày 1 lần
 
 jobs:
   check-and-build:
@@ -15,49 +15,63 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
 
-      # 1. Kiểm tra version mới từ repo gốc
-      - name: Check for 9router updates
-        id: check_version
+      # 1. Lấy Version mới nhất từ Repo gốc (Upstream)
+      - name: Get Latest Upstream Version
+        id: upstream
         run: |
-          LATEST_VER=$(curl -s https://api.github.com/repos/decolua/9router/releases/latest | jq -r .tag_name)
-          echo "latest_version=$LATEST_VER" >> $GITHUB_OUTPUT
-          echo "Phiên bản mới nhất trên upstream: $LATEST_VER"
+          LATEST_TAG=$(curl -s https://api.github.com/repos/decolua/9router/releases/latest | jq -r .tag_name)
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-      # 2. Tạo commit giả để duy trì Action (Keep-alive)
+      # 2. Kiểm tra xem Version đó đã tồn tại trên Docker GHCR của bạn chưa
+      - name: Check if Image exists
+        id: check_image
+        continue-on-error: true
+        run: |
+          TOKEN=$(echo ${{ secrets.GITHUB_TOKEN }} | base64)
+          # Gửi request kiểm tra tag trên GHCR
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $TOKEN" \
+            https://ghcr.io/v2/${{ github.repository }}/manifests/${{ steps.upstream.outputs.tag }})
+          
+          if [ "$STATUS" -eq "200" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      # 3. Tạo commit "nuôi" Action (Luôn chạy để tránh bị disable)
       - name: Keep-alive commit
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          echo "Last run: $(date)" > keep-alive.txt
-          git add keep-alive.txt
-          git commit -m "chore: daily keep-alive build $(date)" || echo "No changes to commit"
+          echo "Last check: $(date) - Latest upstream: ${{ steps.upstream.outputs.tag }}" > status.txt
+          git add status.txt
+          git commit -m "chore: status sync ${{ steps.upstream.outputs.tag }}" || echo "No changes"
           git push
 
-      # 3. Set up Docker Buildx
+      # 4. Chỉ Build nếu Image chưa tồn tại (Tiết kiệm thời gian)
       - name: Set up Docker Buildx
+        if: steps.check_image.outputs.exists == 'false'
         uses: docker/setup-buildx-action@v3
 
-      # 4. Login ghcr.io
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
+        if: steps.check_image.outputs.exists == 'false'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 5. Build và Push (Sử dụng version tag để quản lý tốt hơn)
-      - name: Build and Push Docker Image
+      - name: Build and Push
+        if: steps.check_image.outputs.exists == 'false'
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           tags: |
             ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ steps.check_version.outputs.latest_version }}
+            ghcr.io/${{ github.repository }}:${{ steps.upstream.outputs.tag }}
           platforms: linux/amd64,linux/arm64
-          # Cache giúp build nhanh hơn ở các lần sau
           cache-from: type=gha
           cache-to: type=gha,mode=max
