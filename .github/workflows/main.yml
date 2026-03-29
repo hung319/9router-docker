@@ -1,9 +1,9 @@
-name: Smart Auto Build & Keep-Alive
+name: File-based Auto Build & Keep-Alive
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # Kiểm tra mỗi ngày 1 lần
+    - cron: '0 0 * * *'
 
 jobs:
   check-and-build:
@@ -15,56 +15,69 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # Quan trọng để git có thể push lại
 
-      # 1. Lấy Version mới nhất từ Repo gốc (Upstream)
+      # 1. Lấy Version mới nhất từ Repo gốc
       - name: Get Latest Upstream Version
         id: upstream
         run: |
           LATEST_TAG=$(curl -s https://api.github.com/repos/decolua/9router/releases/latest | jq -r .tag_name)
           echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
 
-      # 2. Kiểm tra xem Version đó đã tồn tại trên Docker GHCR của bạn chưa
-      - name: Check if Image exists
-        id: check_image
-        continue-on-error: true
+      # 2. Đọc Version cũ từ file 'version.txt' (nếu không có thì mặc định là rỗng)
+      - name: Get Local Version
+        id: local
         run: |
-          TOKEN=$(echo ${{ secrets.GITHUB_TOKEN }} | base64)
-          # Gửi request kiểm tra tag trên GHCR
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $TOKEN" \
-            https://ghcr.io/v2/${{ github.repository }}/manifests/${{ steps.upstream.outputs.tag }})
-          
-          if [ "$STATUS" -eq "200" ]; then
-            echo "exists=true" >> $GITHUB_OUTPUT
+          if [ -f version.txt ]; then
+            LOCAL_TAG=$(cat version.txt)
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            LOCAL_TAG="none"
           fi
+          echo "tag=$LOCAL_TAG" >> $GITHUB_OUTPUT
 
-      # 3. Tạo commit "nuôi" Action (Luôn chạy để tránh bị disable)
-      - name: Keep-alive commit
+      # 3. So sánh và Cập nhật file (Luôn commit để Keep-alive)
+      - name: Update Version File & Keep-alive
+        id: compare
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          echo "Last check: $(date) - Latest upstream: ${{ steps.upstream.outputs.tag }}" > status.txt
-          git add status.txt
-          git commit -m "chore: status sync ${{ steps.upstream.outputs.tag }}" || echo "No changes"
+          
+          UPSTREAM="${{ steps.upstream.outputs.tag }}"
+          LOCAL="${{ steps.local.outputs.tag }}"
+          
+          if [ "$UPSTREAM" != "$LOCAL" ]; then
+            echo "Phát hiện version mới: $UPSTREAM (Cũ: $LOCAL)"
+            echo "$UPSTREAM" > version.txt
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            git add version.txt
+            git commit -m "chore: update 9router to $UPSTREAM"
+          else
+            echo "Không có update. Chỉ cập nhật timestamp để nuôi Action."
+            echo "Last check: $(date)" > keep-alive.txt
+            echo "should_build=false" >> $GITHUB_OUTPUT
+            git add keep-alive.txt
+            git commit -m "chore: daily keep-alive $(date)"
+          fi
           git push
 
-      # 4. Chỉ Build nếu Image chưa tồn tại (Tiết kiệm thời gian)
+      # 4. Thiết lập Buildx (Chỉ chạy khi should_build == true)
       - name: Set up Docker Buildx
-        if: steps.check_image.outputs.exists == 'false'
+        if: steps.compare.outputs.should_build == 'true'
         uses: docker/setup-buildx-action@v3
 
+      # 5. Log in ghcr.io
       - name: Log in to GHCR
-        if: steps.check_image.outputs.exists == 'false'
+        if: steps.compare.outputs.should_build == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 6. Build và Push
       - name: Build and Push
-        if: steps.check_image.outputs.exists == 'false'
+        if: steps.compare.outputs.should_build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
