@@ -8,7 +8,7 @@ WORKDIR /app
 RUN apk add --no-cache libc6-compat
 
 # Cài đặt 9router toàn cục
-RUN bun add -g 9router
+RUN bun add -g 9router@latest
 
 # --- PHẦN SỬA LỖI ENOENT ---
 # Tạo thư mục cấu hình mà 9router yêu cầu
