@@ -3,7 +3,7 @@ name: NPM-based Auto Build & Keep-Alive
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # Chạy 00:00 hàng ngày
+    - cron: '0 */6 * * *' # Chạy 00:00 hàng ngày
 
 jobs:
   check-and-build:
