@@ -1,1 +1,1 @@
-Last NPM check: Fri Apr 24 00:33:46 UTC 2026 - Version: 0.4.1
+Last NPM check: Fri Apr 24 18:16:11 UTC 2026 - Version: 0.4.5
